@@ -33,6 +33,29 @@ jobs:
             -backend-config="region=${{ secrets.AWS_REGION }}" \
             -backend-config="key=${{ secrets.PROJECT_NAME }}/terraform.tfstate"
 
+      - name: Empty ECR repository before destroy
+        run: |
+          REPO_NAME="${{ secrets.PROJECT_NAME }}-app"
+          echo "Checking for images in ECR repository: ${REPO_NAME}"
+
+          # List all image digests in the repository
+          IMAGE_IDS=$(aws ecr list-images \
+            --repository-name "${REPO_NAME}" \
+            --region "${{ secrets.AWS_REGION }}" \
+            --query 'imageIds[*]' \
+            --output json 2>/dev/null || echo '[]')
+
+          if [ "${IMAGE_IDS}" = "[]" ] || [ -z "${IMAGE_IDS}" ]; then
+            echo "No images found in ${REPO_NAME}, nothing to delete."
+          else
+            echo "Deleting all images from ${REPO_NAME}..."
+            aws ecr batch-delete-image \
+              --repository-name "${REPO_NAME}" \
+              --region "${{ secrets.AWS_REGION }}" \
+              --image-ids "${IMAGE_IDS}"
+            echo "All images deleted from ${REPO_NAME}."
+          fi
+
       - name: Terraform destroy
         working-directory: terraform
         run: |-
