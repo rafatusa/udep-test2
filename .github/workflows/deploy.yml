@@ -66,7 +66,10 @@ jobs:
     runs-on: ubuntu-latest
     needs: [test, security]
     outputs:
-      image_uri: ${{ steps.set_image_uri.outputs.image_uri }}
+      # Only the tag (short SHA) is passed as a job output — it contains no
+      # masked values (no account ID, no secret) so GitHub Actions will not
+      # suppress it.  The provision job reconstructs the full URI itself.
+      image_tag: ${{ steps.tag.outputs.tag }}
 
     steps:
       - name: Checkout
@@ -122,7 +125,6 @@ jobs:
           TAG="${{ steps.tag.outputs.tag }}"
           IMAGE="${REGISTRY}/${REPO}:${TAG}"
           docker build -t "${IMAGE}" .
-          # Fail explicitly if build failed (belt-and-suspenders)
           if [ $? -ne 0 ]; then
             echo "Docker build FAILED - aborting."
             exit 1
@@ -143,19 +145,6 @@ jobs:
         run: |
           docker push "${{ steps.docker_build.outputs.image }}"
 
-      # Write the output BEFORE masking - GitHub Actions suppresses any output
-      # value that has been masked, so the mask must be applied after the output
-      # is recorded or the downstream job receives an empty string.
-      - name: Set image URI output
-        id: set_image_uri
-        run: |
-          FULL_URI="${{ steps.docker_build.outputs.image }}"
-          # Write the output first so GitHub Actions propagates it downstream
-          echo "image_uri=${FULL_URI}" >> "$GITHUB_OUTPUT"
-          # Mask AFTER writing the output so the account ID is redacted in logs
-          # but the output value is still visible to downstream jobs
-          echo "::add-mask::${FULL_URI}"
-
   # ---------------------------------------------------------------------------
   # provision - Terraform apply (full infra + service update)
   # ---------------------------------------------------------------------------
@@ -175,6 +164,23 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ secrets.AWS_REGION }}
 
+      # Log in to ECR to obtain the registry hostname, then reconstruct the
+      # full image URI from its parts.  None of those parts (tag = short SHA,
+      # repo name = project + "-app", registry from ECR login) is a masked
+      # secret, so the value propagates cleanly across the job boundary.
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Reconstruct image URI
+        id: image
+        run: |
+          REGISTRY="${{ steps.login-ecr.outputs.registry }}"
+          REPO="${{ secrets.PROJECT_NAME }}-app"
+          TAG="${{ needs.build.outputs.image_tag }}"
+          IMAGE_URI="${REGISTRY}/${REPO}:${TAG}"
+          echo "uri=${IMAGE_URI}" >> "$GITHUB_OUTPUT"
+
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
         with:
@@ -189,19 +195,14 @@ jobs:
             -backend-config="region=${{ secrets.AWS_REGION }}" \
             -backend-config="key=${{ secrets.PROJECT_NAME }}/terraform.tfstate"
 
-      - name: Mask image URI
-        run: echo "::add-mask::${{ needs.build.outputs.image_uri }}"
-
       - name: Terraform apply
         working-directory: terraform
-        env:
-          TF_VAR_image_uri: ${{ needs.build.outputs.image_uri }}
         run: |
           terraform apply -auto-approve \
             -var="project_name=${{ secrets.PROJECT_NAME }}" \
             -var="aws_region=${{ secrets.AWS_REGION }}" \
             -var="db_password=${{ secrets.DB_PASSWORD }}" \
-            -var="image_uri=${TF_VAR_image_uri}"
+            -var="image_uri=${{ steps.image.outputs.uri }}"
 
   # ---------------------------------------------------------------------------
   # verify - smoke-test the deployed endpoint
