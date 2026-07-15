@@ -2,11 +2,12 @@
   "name": "udep-test2",
   "version": "1.0.0",
   "private": true,
-  "description": "udep-test2 \u2014 Node.js/Express API",
+  "description": "udep-test2 — Node.js/Express API",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "dev": "node --watch server.js"
+    "dev": "node --watch server.js",
+    "test": "echo \"No tests specified\" && exit 0"
   },
   "dependencies": {
     "express": "^5.1.0",
