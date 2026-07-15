@@ -286,6 +286,7 @@ resource "aws_security_group_rule" "rds_egress_all" {
 resource "aws_ecr_repository" "app" {
   name                 = "${var.project_name}-app"
   image_tag_mutability = "MUTABLE"
+  force_delete         = true
 
   image_scanning_configuration {
     scan_on_push = true
@@ -520,11 +521,11 @@ resource "aws_lb_target_group" "app" {
     path                = "/health"
     port                = "traffic-port"
     protocol            = "HTTP"
-    matcher             = "200-299"
-    interval            = 30
-    timeout             = 10
     healthy_threshold   = 2
-    unhealthy_threshold = 5
+    unhealthy_threshold = 3
+    timeout             = 5
+    interval            = 30
+    matcher             = "200"
   }
 
   tags = { Name = "${var.project_name}-tg" }
@@ -539,20 +540,17 @@ resource "aws_lb_listener" "http" {
     type             = "forward"
     target_group_arn = aws_lb_target_group.app.arn
   }
-
-  tags = { Name = "${var.project_name}-listener" }
 }
 
 # ---------------------------------------------------------------------------
-# ECS Service (private subnets)
+# ECS Service
 # ---------------------------------------------------------------------------
 resource "aws_ecs_service" "app" {
-  name                               = "${var.project_name}-service"
-  cluster                            = aws_ecs_cluster.main.id
-  task_definition                    = aws_ecs_task_definition.app.arn
-  desired_count                      = 1
-  launch_type                        = "FARGATE"
-  health_check_grace_period_seconds  = 120
+  name            = "${var.project_name}-service"
+  cluster         = aws_ecs_cluster.main.id
+  task_definition = aws_ecs_task_definition.app.arn
+  desired_count   = 2
+  launch_type     = "FARGATE"
 
   network_configuration {
     subnets          = [aws_subnet.private_a.id, aws_subnet.private_b.id]
@@ -568,25 +566,18 @@ resource "aws_ecs_service" "app" {
 
   depends_on = [
     aws_lb_listener.http,
-    aws_iam_role_policy_attachment.ecs_execution_managed,
-    aws_iam_role_policy_attachment.ecs_secrets,
-    aws_db_instance.postgres,
+    aws_iam_role_policy_attachment.ecs_execution_managed
   ]
 
-  tags = { Name = "${var.project_name}-service" }
+  tags = { Name = "${var.project_name}-ecs-service" }
 }
 
 # ---------------------------------------------------------------------------
 # Outputs
 # ---------------------------------------------------------------------------
 output "alb_dns_name" {
-  description = "Public DNS name of the Application Load Balancer"
+  description = "Application Load Balancer DNS name"
   value       = aws_lb.app.dns_name
-}
-
-output "app_url" {
-  description = "Application base URL"
-  value       = "http://${aws_lb.app.dns_name}"
 }
 
 output "ecr_repository_url" {
@@ -594,7 +585,17 @@ output "ecr_repository_url" {
   value       = aws_ecr_repository.app.repository_url
 }
 
+output "ecs_cluster_name" {
+  description = "ECS Cluster name"
+  value       = aws_ecs_cluster.main.name
+}
+
+output "ecs_service_name" {
+  description = "ECS Service name"
+  value       = aws_ecs_service.app.name
+}
+
 output "db_secret_arn" {
-  description = "ARN of the Secrets Manager secret holding DB credentials"
+  description = "ARN of the Secrets Manager secret for DB credentials"
   value       = aws_secretsmanager_secret.db_creds.arn
 }
