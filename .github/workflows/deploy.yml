@@ -143,15 +143,18 @@ jobs:
         run: |
           docker push "${{ steps.docker_build.outputs.image }}"
 
-      # Mask the full URI (contains AWS account ID) and expose a safe output
-      - name: Set image URI output (masked)
+      # Write the output BEFORE masking - GitHub Actions suppresses any output
+      # value that has been masked, so the mask must be applied after the output
+      # is recorded or the downstream job receives an empty string.
+      - name: Set image URI output
         id: set_image_uri
         run: |
           FULL_URI="${{ steps.docker_build.outputs.image }}"
-          # Mask the full URI so the account ID is never printed in logs
-          echo "::add-mask::${FULL_URI}"
-          # Expose the full URI as a masked job output for the deploy job
+          # Write the output first so GitHub Actions propagates it downstream
           echo "image_uri=${FULL_URI}" >> "$GITHUB_OUTPUT"
+          # Mask AFTER writing the output so the account ID is redacted in logs
+          # but the output value is still visible to downstream jobs
+          echo "::add-mask::${FULL_URI}"
 
   # ---------------------------------------------------------------------------
   # provision - Terraform apply (full infra + service update)
